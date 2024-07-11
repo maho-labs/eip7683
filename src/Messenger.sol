@@ -6,7 +6,7 @@ import {ResolvedCrossChainOrder, Input, Output} from "./EIP7683/structs/Resolved
 import {ERC20} from "lib/solady/src/tokens/ERC20.sol";
 
 abstract contract Messenger is OApp {
-    mapping(bytes32 => bool) public orders;
+    mapping(bytes32 => bool) public filledOrders;
 
     /**
      * @notice Sends a message from the source to destination chain.
@@ -52,20 +52,7 @@ abstract contract Messenger is OApp {
         bytes32 orderHash = keccak256(abi.encode(order));
 
         if (filled) {
-            (Input[] memory inputs, Output[] memory outputs) = abi.decode(
-                order.orderData,
-                (Input[], Output[])
-            );
-
-            // reward the solver
-            for (uint256 i = 0; i < inputs.length; i++) {
-                ERC20 token = ERC20(inputs[i].token);
-                token.transfer(msg.sender, inputs[i].amount);
-            }
-
-            delete orders[orderHash];
-        } else {
-            orders[orderHash] = true;
+            filledOrders[orderHash] = true;
         }
     }
 }

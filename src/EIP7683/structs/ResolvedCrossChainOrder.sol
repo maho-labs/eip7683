@@ -5,18 +5,6 @@ pragma solidity ^0.8.13;
 /// @dev Defines all requirements for filling an order by unbundling the implementation-specific orderData.
 /// @dev Intended to improve integration generalization by allowing fillers to compute the exact input and output information of any order
 struct ResolvedCrossChainOrder {
-    /// @dev The contract address that the order is meant to be settled by.
-    address settlementContract;
-    /// @dev The address of the user who is initiating the swap
-    address swapper;
-    /// @dev Nonce to be used as replay protection for the order
-    uint256 nonce;
-    /// @dev The chainId of the origin chain
-    uint32 originChainId;
-    /// @dev The timestamp by which the order must be initiated
-    uint32 initiateDeadline;
-    /// @dev The timestamp by which the order must be filled on the destination chain(s)
-    uint32 fillDeadline;
     /// @dev The inputs to be taken from the swapper as part of order initiation
     Input[] swapperInputs;
     /// @dev The outputs to be given to the swapper as part of order fulfillment

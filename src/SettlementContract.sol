@@ -1,70 +1,38 @@
-// SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import "./EIP7683/structs/CrossChainOrder.sol";
-import "./EIP7683/structs/ResolvedCrossChainOrder.sol";
-import "./EIP7683/structs/SolutionSegment.sol";
-import "lib/solady/src/tokens/ERC20.sol";
-import "./Messenger.sol";
 
-contract SettlementContract is Messenger {
+import {OApp, Origin, MessagingFee} from "@layerzerolabs/lz-evm-oapp-v2/contracts/oapp/OApp.sol";
+import {CrossChainOrder} from "./EIP7683/structs/CrossChainOrder.sol";
+import {ResolvedCrossChainOrder, Input, Output} from "./EIP7683/structs/ResolvedCrossChainOrder.sol";
+import {DestinationAppData} from "./EIP7683/structs/DestinationAppData.sol";
+import {SolutionSegment} from "./EIP7683/structs/SolutionSegment.sol";
+import {ERC20} from "lib/solady/src/tokens/ERC20.sol";
+import {Messenger} from "./Messenger.sol";
+import {EIP7683} from "./EIP7683/EIP7683.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {FailedIntent} from "./EIP7683/errors/Intent.sol";
+
+contract SettlementContract is Messenger, EIP7683 {
     constructor(
         address _endpoint,
         address _owner
     ) OApp(_endpoint, _owner) Ownable(_owner) {}
 
-    /// @notice Initiates the settlement of a cross-chain order
-    /// @dev To be called by the filler
-    /// @param order The CrossChainOrder definition
-    /// @param signature The swapper's signature over the order
-    /// @param fillerData Any filler-defined data required by the settler
-    function initiate(
-        CrossChainOrder memory order,
-        bytes calldata signature,
-        bytes calldata fillerData
-    ) external {
-        bytes32 orderHash = keccak256(abi.encode(order));
-        require(!orders[orderHash]);
-
-        (Input[] memory inputs, Output[] memory outputs) = abi.decode(
-            order.orderData,
-            (Input[], Output[])
-        );
-
-        for (uint256 i = 0; i < inputs.length; i++) {
-            ERC20 token = ERC20(inputs[i].token);
-            token.transferFrom(order.swapper, address(this), inputs[i].amount);
-        }
-
-        bytes memory _payload = abi.encode(false, order); // false represents a non filled order
-        orders[orderHash] = true;
-
-        (SolutionSegment[] memory segments, bytes memory _options) = abi.decode(
-            fillerData,
-            (SolutionSegment[], bytes)
-        );
-
-        // send the order to the destination chain
-        this.send(outputs[0].chainId, _payload, _options);
-    }
-
     /// @notice Resolves a specific CrossChainOrder into a generic ResolvedCrossChainOrder
     /// @dev Intended to improve standardized integration of various order types and settlement contracts
     /// @param order The CrossChainOrder definition
     /// @param fillerData Any filler-defined data required by the settler
-    function resolve(
+    function fill(
         CrossChainOrder memory order,
         bytes memory fillerData
     ) external returns (ResolvedCrossChainOrder memory) {
-        (Input[] memory inputs, Output[] memory outputs) = abi.decode(
-            order.orderData,
-            (Input[], Output[])
-        );
-
+        (
+            DestinationAppData memory appData,
+            ResolvedCrossChainOrder memory crossChainOrder
+        ) = abi.decode(
+                order.orderData,
+                (DestinationAppData, ResolvedCrossChainOrder)
+            );
         // get hash of cross chain order
-
-        bytes32 orderHash = keccak256(abi.encode(order));
-        require(orders[orderHash]);
 
         (SolutionSegment[] memory segments, bytes memory _options) = abi.decode(
             fillerData,
@@ -74,19 +42,51 @@ contract SettlementContract is Messenger {
         for (uint256 i = 0; i < segments.length; i++) {
             SolutionSegment memory segment = segments[i];
 
-            payable(segment.to).call{value: segment.value}(segment.data);
+            (bool success, bytes memory data) = payable(segment.to).call{
+                value: segment.value
+            }(segment.data);
+
+            if (!success) {
+                revert FailedIntent(data);
+            }
         }
 
-        // check erc20 balances for each input
-        for (uint256 i = 0; i < inputs.length; i++) {
-            ERC20 token = ERC20(inputs[i].token);
-
-            uint256 balance = token.balanceOf(outputs[i].recipient);
-            require(balance >= outputs[i].amount);
-        }
+        _validateSolution(crossChainOrder.swapperOutputs);
 
         // send message back to origin chain
         bytes memory _payload = abi.encode(true, order); // true represents a non filled order
         this.send(order.originChainId, _payload, _options);
+    }
+
+    function _validateSolution(Output[] memory outputs) private view {
+        for (uint256 i = 0; i < outputs.length; i++) {
+            ERC20 token = ERC20(outputs[i].token);
+
+            uint256 balance = token.balanceOf(outputs[i].recipient);
+            require(balance >= outputs[i].amount);
+        }
+    }
+
+    function claim(CrossChainOrder memory order) public {
+        bytes32 orderHash = keccak256(abi.encode(order));
+
+        require(filledOrders[orderHash], "Order not filled");
+
+        (
+            DestinationAppData memory appData,
+            ResolvedCrossChainOrder memory crossChainOrder
+        ) = abi.decode(
+                order.orderData,
+                (DestinationAppData, ResolvedCrossChainOrder)
+            );
+
+        for (uint256 i = 0; i < crossChainOrder.fillerOutputs.length; i++) {
+            Output memory output = crossChainOrder.fillerOutputs[i];
+
+            ERC20 token = ERC20(output.token);
+            token.transfer(output.recipient, output.amount);
+        }
+
+        delete filledOrders[orderHash];
     }
 }
