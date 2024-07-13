@@ -1,21 +1,21 @@
 pragma solidity ^0.8.20;
 
-import {OApp, Origin, MessagingFee} from "@layerzerolabs/lz-evm-oapp-v2/contracts/oapp/OApp.sol";
 import {CrossChainOrder} from "./EIP7683/structs/CrossChainOrder.sol";
 import {ResolvedCrossChainOrder, Input, Output} from "./EIP7683/structs/ResolvedCrossChainOrder.sol";
 import {DestinationAppData} from "./EIP7683/structs/DestinationAppData.sol";
 import {SolutionSegment} from "./EIP7683/structs/SolutionSegment.sol";
 import {ERC20} from "lib/solady/src/tokens/ERC20.sol";
-import {Messenger} from "./Messenger.sol";
 import {EIP7683} from "./EIP7683/EIP7683.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {FailedIntent} from "./EIP7683/errors/Intent.sol";
+import "@hyperlane-xyz/core/interfaces/IMailbox.sol";
 
-contract SettlementContract is Messenger, EIP7683 {
-    constructor(
-        address _endpoint,
-        address _owner
-    ) OApp(_endpoint, _owner) Ownable(_owner) {}
+contract SettlementContract is EIP7683 {
+    IMailbox public mailbox;
+    mapping(bytes32 => bool) public filledOrders;
+
+    constructor(address _mailbox) {
+        mailbox = IMailbox(_mailbox);
+    }
 
     /// @notice Resolves a specific CrossChainOrder into a generic ResolvedCrossChainOrder
     /// @dev Intended to improve standardized integration of various order types and settlement contracts
@@ -54,8 +54,13 @@ contract SettlementContract is Messenger, EIP7683 {
         _validateSolution(crossChainOrder.swapperOutputs);
 
         // send message back to origin chain
-        bytes memory _payload = abi.encode(true, order); // true represents a non filled order
-        this.send(order.originChainId, _payload, _options);
+        bytes32 _hash = keccak256(abi.encode(order)); // true represents a non filled order
+
+        mailbox.dispatch(
+            order.originChainId,
+            _addressToBytes32(address(this)),
+            abi.encode(_hash)
+        );
     }
 
     function _validateSolution(Output[] memory outputs) private view {
@@ -88,5 +93,19 @@ contract SettlementContract is Messenger, EIP7683 {
         }
 
         delete filledOrders[orderHash];
+    }
+
+    function handle(
+        uint32 _origin,
+        bytes32 _sender,
+        bytes calldata _data
+    ) external payable {
+        bytes32 _hash = abi.decode(_data, (bytes32));
+
+        filledOrders[_hash] = true;
+    }
+
+    function _addressToBytes32(address _addr) internal pure returns (bytes32) {
+        return bytes32(uint256(uint160(_addr)));
     }
 }
