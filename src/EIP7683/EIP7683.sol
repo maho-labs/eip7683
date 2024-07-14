@@ -6,6 +6,7 @@ import "./structs/DestinationAppData.sol";
 import "./structs/SolutionSegment.sol";
 import "./interfaces/ISettlementContract.sol";
 import "lib/solady/src/tokens/ERC20.sol";
+import "lib/solady/src/utils/SignatureCheckerLib.sol";
 
 abstract contract EIP7683 is ISettlementContract {
     /// @notice Initiates the settlement of a cross-chain order
@@ -26,6 +27,18 @@ abstract contract EIP7683 is ISettlementContract {
                 order.orderData,
                 (DestinationAppData, ResolvedCrossChainOrder)
             );
+
+        bytes32 orderHash = keccak256(abi.encode(order));
+
+        // verify the signature the user provided
+
+        bool valid = SignatureCheckerLib.isValidSignatureNow(
+            order.swapper,
+            orderHash,
+            signature
+        );
+
+        require(valid, "EIP7683: invalid signature");
 
         for (uint256 i = 0; i < crossChainOrder.swapperInputs.length; i++) {
             ERC20 token = ERC20(crossChainOrder.swapperInputs[i].token);

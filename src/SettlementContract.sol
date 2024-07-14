@@ -34,9 +34,13 @@ contract SettlementContract is EIP7683 {
             );
         // get hash of cross chain order
 
-        (SolutionSegment[] memory segments, bytes memory _options) = abi.decode(
+        Input[] memory state = _snapshotCurrentState(
+            crossChainOrder.swapperOutputs
+        );
+
+        (SolutionSegment[] memory segments, address destination) = abi.decode(
             fillerData,
-            (SolutionSegment[], bytes)
+            (SolutionSegment[], address)
         );
 
         for (uint256 i = 0; i < segments.length; i++) {
@@ -51,24 +55,39 @@ contract SettlementContract is EIP7683 {
             }
         }
 
-        _validateSolution(crossChainOrder.swapperOutputs);
+        _validateSolution(state, crossChainOrder.swapperOutputs);
 
         // send message back to origin chain
         bytes32 _hash = keccak256(abi.encode(order)); // true represents a non filled order
 
         mailbox.dispatch(
             order.originChainId,
-            _addressToBytes32(address(this)),
+            _addressToBytes32(destination),
             abi.encode(_hash)
         );
     }
 
-    function _validateSolution(Output[] memory outputs) private view {
+    function _snapshotCurrentState(
+        Output[] memory outputs
+    ) internal view returns (Input[] memory state) {
         for (uint256 i = 0; i < outputs.length; i++) {
             ERC20 token = ERC20(outputs[i].token);
 
             uint256 balance = token.balanceOf(outputs[i].recipient);
-            require(balance >= outputs[i].amount);
+            state[i] = Input(outputs[i].token, balance);
+        }
+    }
+
+    function _validateSolution(
+        Input[] memory state,
+        Output[] memory outputs
+    ) internal view {
+        for (uint256 i = 0; i < outputs.length; i++) {
+            ERC20 token = ERC20(outputs[i].token);
+
+            uint256 diff = token.balanceOf(outputs[i].recipient) -
+                state[i].amount;
+            require(diff >= outputs[i].amount);
         }
     }
 
@@ -101,7 +120,6 @@ contract SettlementContract is EIP7683 {
         bytes calldata _data
     ) external payable {
         bytes32 _hash = abi.decode(_data, (bytes32));
-
         filledOrders[_hash] = true;
     }
 
